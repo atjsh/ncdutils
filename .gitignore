@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: Yorhel <projects@yorhel.nl>
+# SPDX-License-Identifier: AGPL-3.0-only
+bin/
+lib/
+shard.lock
+*~
