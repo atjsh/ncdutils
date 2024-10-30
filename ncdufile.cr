@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Yoran Heling <projects@yorhel.nl>
+# SPDX-FileCopyrightText: Yorhel <projects@yorhel.nl>
 # SPDX-License-Identifier: AGPL-3.0-only
 require "bit_array"
 
@@ -322,6 +322,7 @@ module NcduFile
     @file : File
     @index : Slice(Ptr)
     getter root : Ref
+
     def initialize(path)
       @file = File.new path
       @file.read_buffering = false
@@ -363,31 +364,47 @@ module NcduFile
       Slice(UInt8).new data, len, read_only: true
     end
 
-    def validate_items(idx, data, items_seen, list_items, warn_unknown_fields)
+    class ValidateOpts
+      property list_blocks : Bool = false
+      property list_items : Bool = false
+      property warn_unknown_blocks : Bool = true
+      property warn_unknown_fields : Bool = true
+      property warn_multiple_refs : Bool = true
+      property warn_unref : Bool = true
+      # TODO: warn_multiple_refs and warn_unref are not actually sufficient to
+      # detect cycles or items that are unreachable from the root: it's
+      # possible to construct a loop that is unconnected to the main tree. On
+      # the upside, such a loop will never be reached by ncdu and (most likely)
+      # other tools, so that seems harmless. On the other hand, there are
+      # legitimate use cases for having both unreferenced items and multiple
+      # references: COW-based tree mutation. It might be nice to have a loop
+      # detector that works for such files as well.
+    end
+
+    def validate_items(idx, data, items_seen, opts)
       io = IO::Memory.new data
       while io.tell < data.size
-        item = Item.read io, Ref.new(idx, io.tell), warn_unknown_fields
-        puts "  #{item}" if list_items
+        item = Item.read io, Ref.new(idx, io.tell), opts.warn_unknown_fields
+        puts "  #{item}" if opts.list_items
         items_seen.update(item.ref) { |v| v + 1 }
 
         item.prev.try do |r|
-          break if r.raw == 0 && item.ref == root # BUG in ncdu 2.6: root item has 'prev=0'
           items_seen.update(r) do |v|
-            raise "Item #{r} is referenced from multiple places (second = #{item.ref}.prev)" if v > 1
-            v + 2
+            STDERR.puts "WARNING: Item #{r} is referenced from multiple places (second = #{item.ref}.prev)" if opts.warn_multiple_refs && v > 1
+            v | 2
           end
         end
 
         item.sub.try do |r|
           items_seen.update(r) do |v|
-            raise "Item #{r} is referenced from multiple places (second = #{item.ref}.sub)" if v > 1
-            v + 2
+            STDERR.puts "WARNING: Item #{r} is referenced from multiple places (second = #{item.ref}.sub)" if opts.warn_multiple_refs && v > 1
+            v | 2
           end
         end
       end
     end
 
-    def validate(*, list_blocks = false, list_items = false, warn_unknown_blocks = true, warn_unknown_fields = true)
+    def validate(opts)
       blocks_seen = BitArray.new @index.size
       items_seen = Hash(Ref, UInt8).new 0, 4096 # bits: 1 = item seen, 2 = ref to item seen
       items_seen[root] = 2
@@ -397,13 +414,13 @@ module NcduFile
         off = @file.tell
         hdr = @file.read_bytes Hdr
         if hdr.index?
-          puts "#{off}: Index block, length = #{hdr.len}" if list_blocks
+          puts "#{off}: Index block, length = #{hdr.len}" if opts.list_blocks
           break # already validated in initialize()
         end
 
         if !hdr.data?
-          puts "#{off}: Unknown block, type = #{hdr.type}, length = #{hdr.len}" if list_blocks
-          STDERR.puts "WARNING: Unknown block type #{hdr.type} at offset #{off} (length = #{hdr.len})" if warn_unknown_blocks
+          puts "#{off}: Unknown block, type = #{hdr.type}, length = #{hdr.len}" if opts.list_blocks
+          STDERR.puts "WARNING: Unknown block type #{hdr.type} at offset #{off} (length = #{hdr.len})" if opts.warn_unknown_blocks
           raise "Invalid data block length at offset #{off} (#{hdr.len})" if hdr.len < 8
           @file.seek hdr.len - 8, IO::Seek::Current
           foot = @file.read_bytes Hdr
@@ -418,20 +435,20 @@ module NcduFile
         idxptr = Ptr.new off, hdr.len
         raise "Data block #{idx} at offset #{off} has invalid index pointer (expected #{idxptr} got #{@index[idx]})" if idxptr != @index[idx]
         data = read_block idx
-        puts "#{off}: Data block #{idx}, length = #{hdr.len}, uncompressed size = #{data.size}" if list_blocks
+        puts "#{off}: Data block #{idx}, length = #{hdr.len}, uncompressed size = #{data.size}" if opts.list_blocks
 
         # Assumption: file position is at the end of the data after read_block()
         foot = @file.read_bytes Hdr
         raise "Block at offset #{off} has mismatched header/footer (#{hdr} vs. #{foot})" if hdr != foot
         blocks_seen[idx] = true
-        validate_items idx, data, items_seen, list_items, warn_unknown_fields
+        validate_items idx, data, items_seen, opts
       end
 
       @index.each_with_index do |ptr, i|
         raise "Data block #{i} not found in the file, but the index lists it at #{ptr}" if !ptr.empty? && !blocks_seen[i]
       end
       items_seen.each do |ref, v|
-        raise "No references found to item #{ref}" if v == 1
+        STDERR.puts "WARNING: No reference found to item #{ref}" if opts.warn_unref && v == 1
         raise "Invalid reference found to #{ref}" if v == 2
       end
     end
