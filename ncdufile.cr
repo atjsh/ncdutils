@@ -317,11 +317,20 @@ module NcduFile
     end
   end
 
+
   # Low-ish level binary export file reader
   class Reader
     @file : File
     @index : Slice(Ptr)
+    @blocks : Slice(Block)
+    @block_counter : UInt64 = 0
     getter root : Ref
+
+    class Block
+      property idx : UInt64 = UInt64::MAX
+      property last : UInt64 = 0
+      property data : Slice(UInt8) = "".to_slice
+    end
 
     def initialize(path)
       @file = File.new path
@@ -346,6 +355,8 @@ module NcduFile
       end
       @root = @file.read_bytes Ref
       @file.read_buffering = false
+
+      @blocks = Slice(Block).new 8 { Block.new }
     end
 
     def close
@@ -362,6 +373,32 @@ module NcduFile
       ret = ZSTD.decompress data, len, compressed.to_unsafe, compressed.bytesize
       raise "Error decompressing block #{idx}: #{ret}" if ret != len
       Slice(UInt8).new data, len, read_only: true
+    end
+
+    # read_block() but with an LRU cache, works the same as ncdu's bin_reader
+    # because I lack creativity.
+    def get_block(idx)
+      block = @blocks[0]
+      @block_counter += 1
+      @blocks.each_with_index do |b, i|
+        if b.idx == idx
+          b.last = @block_counter
+          return b.data
+        elsif block.last > b.last
+          block = b
+        end
+      end
+      block.idx = idx
+      block.last = @block_counter
+      block.data = read_block idx
+      block.data
+    end
+
+    def get_item(ref : Ref)
+      data = get_block ref.block
+      io = IO::Memory.new data
+      io.seek ref.offset
+      Item.read io, ref
     end
 
     class ValidateOpts
@@ -450,6 +487,62 @@ module NcduFile
       items_seen.each do |ref, v|
         STDERR.puts "WARNING: No reference found to item #{ref}" if opts.warn_unref && v == 1
         raise "Invalid reference found to #{ref}" if v == 2
+      end
+    end
+  end
+
+
+  class Listing
+    include Iterator(Item)
+
+    def initialize(@reader : Reader, @next : Ref?)
+    end
+
+    def next
+      if @next.nil?
+        stop
+      else
+        item = @reader.get_item @next.not_nil!
+        @next = item.prev
+        item
+      end
+    end
+  end
+
+
+  # Higher-level virtual filesystem API.
+  # TODO: Add filtering and sorting options
+  class Browser
+    @reader : Reader
+    getter root : Item
+
+    def initialize(path : String)
+      @reader = Reader.new path
+      @root = @reader.get_item @reader.root
+    end
+
+    def list(ref : Ref)
+      Listing.new @reader, ref
+    end
+
+    def walk(&)
+      path = Path.posix root.name
+      yield path, root
+      stack = [] of Listing
+      stack.push list root.sub.not_nil! if root.sub
+      while !stack.empty?
+        item = stack[-1].next
+        if item.is_a?(Iterator::Stop)
+          stack.pop
+          path = path.parent
+        else
+          fpath = path.join item.name
+          yield fpath, item
+          if !item.sub.nil?
+            path = fpath
+            stack.push list item.sub.not_nil!
+          end
+        end
       end
     end
   end
