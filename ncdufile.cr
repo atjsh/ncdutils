@@ -113,56 +113,48 @@ module NcduFile
   end
 
 
-  class Item
-    property ref : Ref # Ref to current item
-    property type : Int32 = ~0
-    property name : String = "" # Might not validate as UTF-8
-    property prev : Ref?
-    property asize : UInt64 = 0
-    property dsize : UInt64 = 0
-    property dev : UInt64 = 0
-    property rderr : Bool?
-    property cumasize : UInt64 = 0
-    property cumdsize : UInt64 = 0
-    property shrasize : UInt64 = 0
-    property shrdsize : UInt64 = 0
-    property items : UInt64 = 0
-    property sub : Ref?
-    property ino : UInt64 = 0
-    property nlink : UInt32 = 0
-    property uid : UInt32?
-    property gid : UInt32?
-    property mode : UInt16?
-    property mtime : UInt64?
-
-    enum CborMajor : UInt8
+  # Custom CBOR parser. I know, I know, there exists a crystal-cbor shard, but
+  # that one doesn't make it easy to validate the various constraints I
+  # documented for the Item encoding.
+  # This is an ugly parser, but ought to be conforming to the spec.  I've
+  # only tested this against ncdu's output so far, though, so it's pretty
+  # much guaranteed to have bugs. :(
+  class CborReader
+    enum Major : UInt8
       PosInt; NegInt; Bytes; Text; Array; Map; Tag; Simple
     end
 
-    def initialize(@ref)
+    # Read directly from a slice rather than an IO. Even specializing for
+    # IO::Memory turns out to have pretty measurable overhead.
+    def initialize(@input : Bytes)
     end
 
-    # Custom CBOR parser. I know, I know, there exists a crystal-cbor shard, but
-    # that one doesn't make it easy to validate the various constraints I
-    # documented for the Item encoding.
-    # This is an ugly parser, but ought to be conforming to the spec.  I've
-    # only tested this against ncdu's output so far, though, so it's pretty
-    # much guaranteed to have bugs. :(
-    def self.parse_cbor(io : IO::Memory, &)
-      stack = [1] of (UInt16 | CborMajor | Nil)
+    @[AlwaysInline]
+    def con : UInt8
+      v = @input[0]
+      @input = @input[1..]
+      v
+    end
+
+    def size
+      @input.size
+    end
+
+    def parse(&)
+      stack = [1] of (UInt16 | Major | Nil)
       while !stack.empty?
-        first = io.read_bytes UInt8
-        major = CborMajor.new first >> 5
+        first = con
+        major = Major.new first >> 5
         minor = first & 0x1f
         arg : UInt64 | Nil = nil
 
         # Parse header byte + value
         case minor
         when 0x00..0x17 then arg = minor.to_u64
-        when 0x18 then arg = io.read_bytes(UInt8).to_u64
-        when 0x19 then arg = io.read_bytes(UInt16, IO::ByteFormat::BigEndian).to_u64
-        when 0x1a then arg = io.read_bytes(UInt32, IO::ByteFormat::BigEndian).to_u64
-        when 0x1b then arg = io.read_bytes(UInt64, IO::ByteFormat::BigEndian).to_u64
+        when 0x18 then arg = con.to_u64
+        when 0x19 then arg = (con.to_u64 << 8) + con.to_u64
+        when 0x1a then arg = (con.to_u64 << 24) + (con.to_u64 << 16) + (con.to_u64 << 8) + con.to_u64
+        when 0x1b then arg = (con.to_u64 << 56) + (con.to_u64 << 48) + (con.to_u64 << 40) + (con.to_u64 << 32) + (con.to_u64 << 24) + (con.to_u64 << 16) + (con.to_u64 << 8) + con.to_u64
         when 0x1f
           case major
           when .pos_int?, .neg_int?, .tag?
@@ -173,14 +165,15 @@ module NcduFile
         else
           raise "Invalid CBOR"
         end
-        raise "Invalid CBOR" if stack.last.is_a? CborMajor && (arg.nil? || stack.last != major)
+        raise "Invalid CBOR" if stack.last.is_a? Major && (arg.nil? || stack.last != major)
 
         # Read text/bytes argument
         data = nil
         if !arg.nil? && (major.text? || major.bytes?)
           raise "Invalid CBOR" if arg > (1<<24)
-          data = io.read_string arg
-          raise "Invalid CBOR" if major.text? && !data.valid_encoding?
+          data = @input[0..arg]
+          @input = @input[arg..]
+          raise "Invalid CBOR" if major.text? && !Unicode.valid? data
         end
 
         yield stack.size - 1, major, arg, data
@@ -209,6 +202,37 @@ module NcduFile
           end
         end
       end
+      data
+    end
+  end
+
+
+  class Item
+    property ref : Ref # Ref to current item
+    property type : Int32 = ~0
+    # Beware: The 'name' points into the read buffer, and said buffer will not
+    # be GC'ed as long as the item is alive. For longer-lived items, make sure
+    # to call detach() to create a separate allocation.
+    property name : Bytes = Bytes.empty # Might not validate as UTF-8
+    property prev : Ref?
+    property asize : UInt64 = 0
+    property dsize : UInt64 = 0
+    property dev : UInt64 = 0
+    property rderr : Bool?
+    property cumasize : UInt64 = 0
+    property cumdsize : UInt64 = 0
+    property shrasize : UInt64 = 0
+    property shrdsize : UInt64 = 0
+    property items : UInt64 = 0
+    property sub : Ref?
+    property ino : UInt64 = 0
+    property nlink : UInt32 = 0
+    property uid : UInt32?
+    property gid : UInt32?
+    property mode : UInt16?
+    property mtime : UInt64?
+
+    def initialize(@ref)
     end
 
     # Wonderfully unhygenic macros to help with field parsing.
@@ -230,11 +254,11 @@ module NcduFile
       end
     end
 
-    def self.read(io, ref, warn_unknown_fields = false) : Item
+    def self.read(parser, ref, warn_unknown_fields = false) : Item
       item = new ref
       key = nil
 
-      parse_cbor io do |depth, major, arg, data|
+      parser.parse do |depth, major, arg, data|
         raise "Invalid item at #{ref}: #{major}" if depth == 0 && !major.map?
         next if depth == 0 || depth > 1 # We don't have any fields that support nesting, so can safely skip
         next if major.simple? && arg.nil?  # Ignore the 'break'
@@ -313,7 +337,13 @@ module NcduFile
       io << " gid=" << gid if gid
       io << " mode=" << mode if mode
       io << " mtime=" << mtime if mtime
-      io << " name=" << name << "}"
+      io << " name="
+      io.write name
+      io << "}"
+    end
+
+    def detach
+      @name = @name.clone
     end
   end
 
@@ -396,9 +426,8 @@ module NcduFile
 
     def get_item(ref : Ref)
       data = get_block ref.block
-      io = IO::Memory.new data
-      io.seek ref.offset
-      Item.read io, ref
+      p = CborReader.new data[ref.offset..]
+      Item.read p, ref
     end
 
     class ValidateOpts
@@ -419,9 +448,9 @@ module NcduFile
     end
 
     def validate_items(idx, data, items_seen, opts)
-      io = IO::Memory.new data
-      while io.tell < data.size
-        item = Item.read io, Ref.new(idx, io.tell), opts.warn_unknown_fields
+      p = CborReader.new data
+      while p.size > 0
+        item = Item.read p, Ref.new(idx, data.size - p.size), opts.warn_unknown_fields
         puts "  #{item}" if opts.list_items
         items_seen.update(item.ref) { |v| v + 1 }
 
@@ -525,21 +554,48 @@ module NcduFile
       Listing.new @reader, ref
     end
 
+    class Parents
+      property stack : Array(Item)
+
+      def initialize
+        @stack = [] of Item
+      end
+
+      def to_s(io)
+        return if stack.empty?
+        io.write stack[0].name
+        stack[1..].each do |i|
+          io.write_byte 47
+          io.write i.name
+        end
+      end
+
+      def to_s(io, subname)
+        io << self
+        io.write_byte 47 if !stack.empty?
+        io.write subname
+      end
+    end
+
+    # yields Parents, Item
+    # Parents is modified in-place as directories are traversed.
     def walk(&)
-      path = Path.posix root.name
-      yield path, root
+      parents = Parents.new
+      yield parents, root
       stack = [] of Listing
       stack.push list root.sub.not_nil! if root.sub
+      root.detach
+      parents.stack.push root
       while !stack.empty?
         item = stack[-1].next
         if item.is_a?(Iterator::Stop)
           stack.pop
-          path = path.parent
+          parents.stack.pop
         else
-          fpath = path.join item.name
-          yield fpath, item
+          yield parents, item
           if !item.sub.nil?
-            path = fpath
+            item.detach
+            parents.stack.push item
             stack.push list item.sub.not_nil!
           end
         end

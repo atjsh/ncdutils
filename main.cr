@@ -58,6 +58,8 @@ class Cli
   end
 end
 
+STDOUT.flush_on_newline = false
+
 cli = Cli.new
 
 case cli.cmd
@@ -66,9 +68,10 @@ when .none?
   exit 1
 when .find?
   f = NcduFile::Browser.new cli.input_file
-  f.walk do |path, item|
+  f.walk do |parents, item|
     begin
-      puts path
+      parents.to_s STDOUT, item.name
+      STDOUT.write_byte 10
     rescue
       exit 0
     end
