@@ -120,29 +120,28 @@ module NcduFile
   # only tested this against ncdu's output so far, though, so it's pretty
   # much guaranteed to have bugs. :(
   class CborReader
+    getter offset : Int32
+
     enum Major : UInt8
       PosInt; NegInt; Bytes; Text; Array; Map; Tag; Simple
     end
 
     # Read directly from a slice rather than an IO. Even specializing for
     # IO::Memory turns out to have pretty measurable overhead.
-    def initialize(@input : Bytes)
+    def initialize(@input : Bytes, @offset : Int32 = 0)
     end
 
     @[AlwaysInline]
     def con : UInt8
-      v = @input[0]
-      @input = @input[1..]
-      v
-    end
-
-    def size
-      @input.size
+      @input[@offset] # relies on bounds checking to throw an error on unexpected EOF
+    ensure
+      @offset += 1
     end
 
     def parse(&)
       stack = [1] of (UInt16 | Major | Nil)
       while !stack.empty?
+        last = stack.last
         first = con
         major = Major.new first >> 5
         minor = first & 0x1f
@@ -160,23 +159,23 @@ module NcduFile
           when .pos_int?, .neg_int?, .tag?
             raise "Invalid CBOR"
           when .simple?
-            raise "Invalid CBOR" if stack.last.is_a? UInt16
+            raise "Invalid CBOR" if last.is_a? UInt16
           end
         else
           raise "Invalid CBOR"
         end
-        raise "Invalid CBOR" if stack.last.is_a? Major && (arg.nil? || stack.last != major)
+        raise "Invalid CBOR" if last.is_a? Major && (arg.nil? || last != major)
+        next if major.tag?
 
         # Read text/bytes argument
         data = nil
         if !arg.nil? && (major.text? || major.bytes?)
-          raise "Invalid CBOR" if arg > (1<<24)
-          data = @input[0..arg]
-          @input = @input[arg..]
+          data = @input[@offset .. @offset + arg]
+          @offset += arg
           raise "Invalid CBOR" if major.text? && !Unicode.valid? data
         end
 
-        yield stack.size - 1, major, arg, data
+        yield stack.size, major, arg, data
 
         # Update parsing state
         if arg.nil? && (major.text? || major.bytes?)
@@ -188,12 +187,12 @@ module NcduFile
             raise "Invalid CBOR" if arg >= (1<<15)
             stack.push (major.map? ? arg * 2 : arg).to_u16
           end
-        elsif !major.tag?
+        else
           stack.pop if first == 0xff
           loop do
             last = stack.last?
             if last.is_a? UInt16
-              stack[stack.size-1] = last - 1
+              stack[-1] = last - 1
               break if last > 1
               stack.pop
             else
@@ -202,7 +201,6 @@ module NcduFile
           end
         end
       end
-      data
     end
   end
 
@@ -259,22 +257,22 @@ module NcduFile
       key = nil
 
       parser.parse do |depth, major, arg, data|
-        raise "Invalid item at #{ref}: #{major}" if depth == 0 && !major.map?
-        next if depth == 0 || depth > 1 # We don't have any fields that support nesting, so can safely skip
-        next if major.simple? && arg.nil?  # Ignore the 'break'
+        if depth != 2
+          raise "Invalid item at #{ref}: #{major}" if depth == 1 && !major.map?
+          next # We don't have any fields that support nesting, so can safely skip
+        end
 
-        if key.nil?
+        case key
+        when .nil?
           if major.pos_int? && arg.not_nil! <= 18
             key = arg.not_nil!.to_i32
-          else
+          elsif !major.simple? || !arg.nil?
             STDERR.puts "WARNING: Unknown field in item #{ref}: #{major} #{arg} #{data}" if warn_unknown_fields
             key = -1
           end
           next
-        end
-
-        case key
-        when -1 then next
+        when -1
+          # skip unknown field
         when 0
           case major
           when .pos_int? then item.type = arg.not_nil! > 3 ? 2 : arg.not_nil!.to_i32
@@ -426,7 +424,7 @@ module NcduFile
 
     def get_item(ref : Ref)
       data = get_block ref.block
-      p = CborReader.new data[ref.offset..]
+      p = CborReader.new data, ref.offset
       Item.read p, ref
     end
 
@@ -449,8 +447,8 @@ module NcduFile
 
     def validate_items(idx, data, items_seen, opts)
       p = CborReader.new data
-      while p.size > 0
-        item = Item.read p, Ref.new(idx, data.size - p.size), opts.warn_unknown_fields
+      while p.offset < data.size
+        item = Item.read p, Ref.new(idx, p.offset), opts.warn_unknown_fields
         puts "  #{item}" if opts.list_items
         items_seen.update(item.ref) { |v| v + 1 }
 
