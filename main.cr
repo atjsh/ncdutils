@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: Yorhel <projects@yorhel.nl>
 # SPDX-License-Identifier: AGPL-3.0-only
 require "option_parser"
+require "http/server"
+
 require "./ncdufile"
+require "./web"
 
 
 class Cli
@@ -9,12 +12,14 @@ class Cli
     None
     Find
     Validate
+    Web
   end
 
   property parser : OptionParser
   property cmd = Cmd::None
   property input_file = ""
   property validate_opts = NcduFile::Reader::ValidateOpts.new
+  property bind_address = "tcp://127.0.0.1:3000"
 
   def arg_input_file
     parser.unknown_args do |args|
@@ -48,6 +53,12 @@ class Cli
       parser.on("--ignore-unref", "Disable warnings about unreferenced items") { validate_opts.warn_unref = false }
       arg_input_file
     end
+    parser.on("web", "Spawn a web server to browse the file") do
+      @cmd = Cmd::Web
+      parser.banner = "Usage: ncdutils web <file>"
+      parser.on("--bind=ADDR", "Bind to the given address") { |s| @bind_address = s }
+      arg_input_file
+    end
     parser.unknown_args do |args|
       next if args.size == 0
       STDERR.puts "ERROR: Unknown option '#{args[0]}'."
@@ -66,6 +77,7 @@ case cli.cmd
 when .none?
   STDERR.puts cli.parser
   exit 1
+
 when .find?
   f = NcduFile::Browser.new cli.input_file
   f.walk do |parents, item|
@@ -76,6 +88,7 @@ when .find?
       exit 0
     end
   end
+
 when .validate?
   begin
     f = NcduFile::Reader.new cli.input_file
@@ -84,4 +97,11 @@ when .validate?
     STDERR.puts ex.message
     exit 1
   end
+
+when .web?
+  f = NcduFile::Browser.new cli.input_file
+  s = HTTP::Server.new { |ctx| NcduWeb.serve f, ctx }
+  s.bind cli.bind_address
+  puts "Listening on #{cli.bind_address}"
+  s.listen
 end

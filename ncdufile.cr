@@ -170,7 +170,7 @@ module NcduFile
         # Read text/bytes argument
         data = nil
         if !arg.nil? && (major.text? || major.bytes?)
-          data = @input[@offset .. @offset + arg]
+          data = @input[@offset ... @offset + arg]
           @offset += arg
           raise "Invalid CBOR" if major.text? && !Unicode.valid? data
         end
@@ -598,6 +598,30 @@ module NcduFile
           end
         end
       end
+    end
+
+    # TODO: Memoize/cache
+    # TODO: This function assumes that non-root item names don't contain a '/'.
+    #   This is always true for ncdu-generated exports, but ncdu itself handles
+    #   '/' in names just fine and I expect multi-argument scans to make use of
+    #   that, if I ever get to implementing that feature.
+    def resolve(path)
+      parents = [root] of Item
+      path.each_part do |name|
+        next if name == "" || name == "/"
+        sub = parents.last.sub || return nil
+        found = false
+        list(sub).each do |item|
+          if item.name == name.to_slice
+            item.detach
+            parents.push item
+            found = true
+            break
+          end
+        end
+        return nil unless found
+      end
+      parents
     end
   end
 end
