@@ -229,6 +229,7 @@ module NcduFile
     property gid : UInt32?
     property mode : UInt16?
     property mtime : UInt64?
+    @attached = true
 
     def initialize(@ref)
     end
@@ -341,7 +342,9 @@ module NcduFile
     end
 
     def detach
-      @name = @name.clone
+      @name = @name.clone if @attached
+      @attached = false
+      self
     end
   end
 
@@ -545,7 +548,7 @@ module NcduFile
 
     def initialize(path : String)
       @reader = Reader.new path
-      @root = @reader.get_item @reader.root
+      @root = @reader.get_item(@reader.root).detach
     end
 
     def list(ref : Ref)
@@ -557,6 +560,10 @@ module NcduFile
 
       def initialize
         @stack = [] of Item
+      end
+
+      def push(item)
+        stack.push item.detach
       end
 
       def to_s(io)
@@ -582,8 +589,7 @@ module NcduFile
       yield parents, root
       stack = [] of Listing
       stack.push list root.sub.not_nil! if root.sub
-      root.detach
-      parents.stack.push root
+      parents.push root
       while !stack.empty?
         item = stack[-1].next
         if item.is_a?(Iterator::Stop)
@@ -592,8 +598,7 @@ module NcduFile
         else
           yield parents, item
           if !item.sub.nil?
-            item.detach
-            parents.stack.push item
+            parents.push item
             stack.push list item.sub.not_nil!
           end
         end
@@ -613,8 +618,7 @@ module NcduFile
         found = false
         list(sub).each do |item|
           if item.name == name.to_slice
-            item.detach
-            parents.push item
+            parents.push item.detach
             found = true
             break
           end
