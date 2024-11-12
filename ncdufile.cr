@@ -352,9 +352,11 @@ module NcduFile
   # Low-ish level binary export file reader
   class Reader
     @file : File
+    @path : String
     @index : Slice(Ptr)
     @blocks : Slice(Block)
     @block_counter : UInt64 = 0
+    getter size : Int64
     getter root : Ref
 
     class Block
@@ -363,8 +365,8 @@ module NcduFile
       property data : Slice(UInt8) = "".to_slice
     end
 
-    def initialize(path)
-      @file = File.new path
+    def initialize(@path)
+      @file = File.new @path
       @file.read_buffering = false
       header = @file.read_string 8
       raise "Unrecognized file type" if header != "\xbfncduEX1"
@@ -372,6 +374,7 @@ module NcduFile
       # Find the start of the index block
       @file.seek -4, IO::Seek::End
       index_hdr = @file.read_bytes Hdr
+      @size = @file.tell
       raise "Invalid index block" if !index_hdr.index? || index_hdr.len < 24 || index_hdr.len & 7 != 0
       @file.seek 0 - index_hdr.len, IO::Seek::End
       index_start = @file.tell
@@ -388,6 +391,11 @@ module NcduFile
       @file.read_buffering = false
 
       @blocks = Slice(Block).new 8 { Block.new }
+    end
+
+    def dup
+      # Crystal std doesn't seem to expose dup(). It does have dup2(), but unsure how to use that.
+      File.new @path
     end
 
     def close
@@ -543,11 +551,14 @@ module NcduFile
   # Higher-level virtual filesystem API.
   # TODO: Add filtering and sorting options
   class Browser
-    @reader : Reader
+    getter reader : Reader
     getter root : Item
+    # Responsibility of the caller to use this correctly.
+    property lock : Mutex
 
     def initialize(path : String)
       @reader = Reader.new path
+      @lock = Mutex.new
       @root = @reader.get_item(@reader.root).detach
     end
 

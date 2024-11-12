@@ -98,7 +98,9 @@ class NcduWeb
 
   def render(path)
     res << "<!DOCTYPE html>\n"
-    res << "<html><head><title>Ncdu » /"
+    res << %{<html><head>
+      <meta name="robots" value="noindex, nofollow">
+      <title>Ncdu » /}
     path[1..].each_with_index do |item, i|
       res << "/" if i > 0
       HTML.escape item.name, res
@@ -119,7 +121,7 @@ class NcduWeb
         td { padding: 1px 5px }
         thead { font-weight: bold }
 
-        header { border-bottom: 3px solid #ccc }
+        header { border-bottom: 3px solid #ccc; display: flex; justify-content: space-between }
         h1 { font-weight: bold }
 
         nav { padding: 2px 10px; background: #ddd; font-weight: bold }
@@ -132,7 +134,13 @@ class NcduWeb
         .file { color: #000 }
       </style></head>
       <body>
-      <header><h1>Ncdu Browser</h1></header>
+      <header>
+        <h1>Ncdu Export Browser</h1>
+        <span>
+          <a href="/?export.ncdu">export.ncdu</a>
+          (} << file.reader.size.humanize_bytes << %{)
+        </span>
+      </header>
       <main>}
     parents path
     # TODO: item info
@@ -140,17 +148,43 @@ class NcduWeb
     res << "</main></body></html>"
   end
 
+  def handle
+    path = file.resolve Path.posix URI.decode req.path
+    if path
+      res.content_type = "text/html; charset=utf8"
+      res.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+      render path
+    else
+      res.status = HTTP::Status::NOT_FOUND
+      res.content_type = "text/plain"
+      res << "404 Page Not Found"
+    end
+  end
+
   def self.serve(file, ctx)
     c = new file, ctx
-    c.res.content_type = "text/html; charset=utf8"
-    c.res.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
-    path = file.resolve Path.posix URI.decode c.req.path
-    if path
-      c.render path
-    else
-      c.res.status = HTTP::Status::NOT_FOUND
+
+    # Sorry, if the tree has an actual /robots.txt as a file, this will overshadow it *shrug*.
+    if c.req.path == "/robots.txt"
       c.res.content_type = "text/plain"
-      c.res << "404 Page Not Found"
+      c.res << "User-agent: *\nDisallow: /\n"
+      return
     end
+
+    if c.req.path == "/" && c.req.query == "export.ncdu"
+      c.res.content_type = "application/octet-stream"
+      c.res.headers["Content-disposition"] = %{attachment; filename="export.ncdu"}
+      # Re-open the file so that we don't have to keep the mutex locked during the transfer.
+      # TODO: Partial file transfer support might be nice.
+      fd = file.reader.dup
+      begin
+        IO.copy fd, c.res
+      ensure
+        fd.close
+      end
+      return
+    end
+
+    file.lock.synchronize { c.handle }
   end
 end
