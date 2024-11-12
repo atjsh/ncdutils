@@ -6,6 +6,8 @@ class NcduWeb
   getter res : HTTP::Server::Response
   getter file : NcduFile::Browser
 
+  MAX_LISTING = 10_000
+
   def initialize(@file, ctx)
     @req = ctx.request
     @res = ctx.response
@@ -46,9 +48,9 @@ class NcduWeb
     # - item type / flags
     # - asize?
     # - extended info?
-    # - Pagination / result limit?
+    # - Pagination?
     if ref.nil?
-      res << "<p><em>Directory empty</em></p>"
+      res << "<p>Directory empty.</p>"
       return
     end
 
@@ -62,6 +64,7 @@ class NcduWeb
       (b.type == 0 ? b.cumdsize : b.dsize) <=> (a.type == 0 ? a.cumdsize : a.dsize)
     end
 
+    res << "<p>List truncated to the first " << MAX_LISTING.format << " items.</p>" if list.size > MAX_LISTING
     res << %{
       <table class=\"listing\">
       <thead><tr>
@@ -71,7 +74,8 @@ class NcduWeb
     res << %{<td>Name</td>
       </tr></thead><tbody>}
 
-    list.each do |item|
+    list.each_with_index do |item, i|
+      break if i >= MAX_LISTING
       res << "<tr><td class=\"num\">"
       ((item.type == 0 ? item.cumdsize : item.dsize)/1024).format res, decimal_places: 0, only_significant: true
       res << "K</td>"
@@ -147,6 +151,7 @@ class NcduWeb
         em { color: #c00 }
         .name { white-space: pre-wrap }
         table { margin: 5px; border-collapse: collapse }
+        p { margin: 5px }
         td { padding: 1px 5px }
         thead { font-weight: bold }
 
