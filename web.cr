@@ -11,7 +11,34 @@ class NcduWeb
     @res = ctx.response
   end
 
-  # TODO: HTML.escape alternative for paths, to better display non-UTF8 or special characters
+  def print_chr(b, tags = true)
+    res << "<em>" if tags
+    res << "\\x"
+    res.write_byte ((b>>4) < 10 ? 48_u8 : 87_u8) + (b>>4)
+    res.write_byte ((b&0xf) < 10 ? 48_u8 : 87_u8) + (b&0xf)
+    res << "</em>" if tags
+  end
+
+  def print_name(name, tags = true)
+    res << %{<span class="name">} if tags
+    r = Char::Reader.new String.new name
+    while r.has_next?
+      if r.error
+        print_chr name[r.pos], tags
+      else
+        c = r.current_char
+        case c
+        when '&' then res << "&amp;"
+        when '<' then res << "&lt;"
+        when '>' then res << "&gt;"
+        when '\0'..'\u001f', '\u007f' then print_chr c.ord.to_u8, tags
+        else res << c
+        end
+      end
+      r.next_char
+    end
+    res << "</span>" if tags
+  end
 
   def listing(ref)
     # TODO:
@@ -72,7 +99,7 @@ class NcduWeb
       URI.encode_path res, String.new item.name
       res << '/' if item.type == 0
       res << "\">"
-      HTML.escape item.name, res
+      print_name item.name
       res << "</a>"
       res << '/' if item.type == 0
       res << "</td>"
@@ -84,13 +111,13 @@ class NcduWeb
   def parents(path)
     res << "<nav>"
     path.each_with_index do |item, i|
-      res << "<span>/</span>" if i > 0
+      res << %{<span class="sep">/</span>} if i > 0
       if i+1 != path.size
         res << "<a href=\""
         (path.size-i-1).times { res << "../" }
         res << "\">"
       end
-      HTML.escape item.name, res
+      print_name item.name
       res << "</a>" if i+1 != path.size
     end
     res << "</nav>"
@@ -103,7 +130,7 @@ class NcduWeb
       <title>Ncdu » /}
     path[1..].each_with_index do |item, i|
       res << "/" if i > 0
-      HTML.escape item.name, res
+      print_name item.name, false
     end
     res << "</title><base href=\"/"
     # The path and file URLs rely on this base; the final '/' is not always
@@ -117,6 +144,8 @@ class NcduWeb
         body { font: 13px sans-serif; margin: 5px; background: #fff; color: #000 }
         a { color: #00c; text-decoration: none }
         a:hover { text-decoration: underline }
+        em { color: #c00 }
+        .name { white-space: pre-wrap }
         table { margin: 5px; border-collapse: collapse }
         td { padding: 1px 5px }
         thead { font-weight: bold }
@@ -125,7 +154,7 @@ class NcduWeb
         h1 { font-weight: bold }
 
         nav { padding: 2px 10px; background: #ddd; font-weight: bold }
-        nav span { padding: 0 3px }
+        nav .sep { padding: 0 3px }
 
         .listing { width: 100% }
         .listing tbody tr:hover { background: #eee }
