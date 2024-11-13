@@ -174,6 +174,7 @@ class NcduWeb
         <span>
           <a href="} << @prefix << %{?export.ncdu">export.ncdu</a>
           (} << file.reader.size.humanize_bytes << %{)
+          } << (@prefix != "/" ? %{| <a href="/">new upload</a>} : "") << %{
         </span>
       </header>
       <main>}
@@ -235,7 +236,7 @@ class NcduWebUpload
     property file : NcduFile::Browser? = nil
   end
 
-  def initialize(@base_url : String)
+  def initialize(@base_url : String, @ncdu_bin : String)
     @files = Slice(Cache).new 8 { Cache.new }
   end
 
@@ -274,6 +275,7 @@ class NcduWebUpload
         fieldset { margin: 5px; padding: 10px; border: 1px solid #ccc }
         legend { font-weight: bold }
         input[type=submit] { padding: 3px 5px; background: #eee; border: 1px solid #999 }
+        p { margin: 5px 0 }
         pre { padding: 3px 5px; font-family: monospace; background: #eee }
        </style>
       </head>
@@ -288,13 +290,14 @@ class NcduWebUpload
           <legend>From the browser</legend>
           <input type="file" name="f">
           <input type="submit" value="Upload">
+          <p>Supported files: <a href="https://dev.yorhel.nl/ncdu/jsonfmt">.json</a>, .json.zst,
+            <a href="https://dev.yorhel.nl/ncdu/binfmt">.ncdu</a></p>
          </fieldset>
          <fieldset>
           <legend>From the command line</legend>
-          <pre>\
-            # ncdu 2.6+<br>\
-            ncdu -1eO- | curl -T- } << base_url(ctx) << %{/\
-           </pre>
+          <pre>ncdu -1o- | zstd | curl -T- } << base_url(ctx) << %{/</pre>
+          <p>Or with ncdu 2.6+:</p>
+          <pre>ncdu -1O- | curl -T- } << base_url(ctx) << %{/</pre>
          </fieldset>
         </form>
         <article>
@@ -328,25 +331,30 @@ class NcduWebUpload
     end
   end
 
-  def upload_io(ctx, io)
+  def upload_io(ctx, io : IO)
     id = Random::Secure.urlsafe_base64 12 # 16 characters, 96 bits of randomnes
-    # TODO: Detect .json/.json.zst and convert through ncdu.
+    tmp = id+".tmp"
     begin
-      File.write id+".tmp", io
+      peek = io.peek
+      if peek && peek.size >= 8 && peek[0...8] == "\xbfncduEX1".to_slice
+        File.write tmp, io
+      else
+        Process.run command: @ncdu_bin, args: {"-e0f-","-O", tmp}, input: io, output: Process::Redirect::Close, error: Process::Redirect::Inherit
+      end
       # See if it looks like a complete .ncdu file
-      f = NcduFile::Browser.new id + ".tmp"
+      f = NcduFile::Browser.new tmp
       f.reader.close
-      File.rename id+".tmp", id+".ncdu"
+      File.rename tmp, id+".ncdu"
       return id
     rescue e
       STDERR.puts "Invalid upload (#{e})"
-      File.delete? id+".tmp"
+      File.delete? tmp
       return nil
     end
   end
 
   def upload_put(ctx)
-    id = upload_io ctx, ctx.request.body
+    id = upload_io ctx, ctx.request.body.not_nil!
     ctx.response.content_type = "text/plain"
     if id
       ctx.response << "Upload complete! Browse the results at:\n#{base_url ctx}/#{id}/\n"
