@@ -207,7 +207,7 @@ module NcduFile
 
   class Item
     property ref : Ref # Ref to current item
-    property type : Int32 = ~0
+    property type : Int32 = Int32::MIN
     # Beware: The 'name' points into the read buffer, and said buffer will not
     # be GC'ed as long as the item is alive. For longer-lived items, make sure
     # to call detach() to create a separate allocation.
@@ -311,7 +311,7 @@ module NcduFile
         key = nil
       end
       raise "Missing or empty 'name' for item #{ref}" if item.name == ""
-      raise "Missing 'type' for item #{ref}" if item.type == ~0
+      raise "Missing 'type' for item #{ref}" if item.type == Int32::MIN
       # TODO: Validate the presence of optional fields for the wrong type? Ncdu doesn't really care...
       item
     end

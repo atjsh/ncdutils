@@ -204,7 +204,7 @@ class NcduWeb
       return
     end
 
-    path = c.req.path.lstrip prefix
+    path = c.req.path.lchop prefix
     if path == "" && c.req.query == "export.ncdu"
       c.res.content_type = "application/octet-stream"
       c.res.headers["Content-disposition"] = %{attachment; filename="export.ncdu"}
@@ -235,8 +235,16 @@ class NcduWebUpload
     property file : NcduFile::Browser? = nil
   end
 
-  def initialize
+  def initialize(@base_url : String)
     @files = Slice(Cache).new 8 { Cache.new }
+  end
+
+  def base_url(ctx)
+    if @base_url.empty?
+      "http://" + (ctx.request.headers["host"]? || "localhost")
+    else
+      @base_url
+    end
   end
 
   def index(ctx)
@@ -253,6 +261,21 @@ class NcduWebUpload
       <head>
        <title>Ncdu Export Browser</title>
        <meta name="robots" value="noindex, nofollow">
+       <style type="text/css">
+        * { font: inherit; color: inherit; border: 0; margin: 0; padding: 0 }
+        body { font: 15px sans-serif; margin: 5px; background: #fff; color: #000 }
+        a { color: #00c; text-decoration: none }
+        a:hover { text-decoration: underline }
+
+        header { border-bottom: 3px solid #ccc; display: flex; justify-content: space-between }
+        h1, h2 { font-weight: bold; font-size: 120% }
+
+        main { margin: 20px auto; max-width: 700px }
+        fieldset { margin: 5px; padding: 10px; border: 1px solid #ccc }
+        legend { font-weight: bold }
+        input[type=submit] { padding: 3px 5px; background: #eee; border: 1px solid #999 }
+        pre { padding: 3px 5px; font-family: monospace; background: #eee }
+       </style>
       </head>
       <body>
        <header>
@@ -260,9 +283,22 @@ class NcduWebUpload
        </header>
        <main>
         <form method="POST" action="/" enctype="multipart/form-data">
-         <input type="file" name="f">
-         <input type="submit" value="Upload">
+          <h2>Upload file</h2>
+         <fieldset>
+          <legend>From the browser</legend>
+          <input type="file" name="f">
+          <input type="submit" value="Upload">
+         </fieldset>
+         <fieldset>
+          <legend>From the command line</legend>
+          <pre>\
+            # ncdu 2.6+<br>\
+            ncdu -1eO- | curl -T- } << base_url(ctx) << %{/\
+           </pre>
+         </fieldset>
         </form>
+        <article>
+        </article>
        </main>
       </body></html>}
   end
@@ -309,6 +345,16 @@ class NcduWebUpload
     end
   end
 
+  def upload_put(ctx)
+    id = upload_io ctx, ctx.request.body
+    ctx.response.content_type = "text/plain"
+    if id
+      ctx.response << "Upload complete! Browse the results at:\n#{base_url ctx}/#{id}/\n"
+    else
+      ctx.response << "Invalid format or upload error.\n"
+    end
+  end
+
   def upload_post(ctx)
     id = nil
     HTTP::FormData.parse(ctx.request) do |part|
@@ -328,8 +374,13 @@ class NcduWebUpload
       return
     end
 
+    # For 'curl -T', path can be anything
+    if ctx.request.method == "PUT"
+      upload_put ctx
+      return
+    end
+
     if ctx.request.path == "/"
-      # TODO: PUT support for curl -T
       if ctx.request.method == "POST"
         upload_post ctx
       else
