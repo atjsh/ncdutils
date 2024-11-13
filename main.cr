@@ -13,6 +13,7 @@ class Cli
     Find
     Validate
     Web
+    WebUpload
   end
 
   property parser : OptionParser
@@ -20,6 +21,7 @@ class Cli
   property input_file = ""
   property validate_opts = NcduFile::Reader::ValidateOpts.new
   property bind_address = "tcp://127.0.0.1:3000"
+  property upload_path = "."
 
   def arg_input_file
     parser.unknown_args do |args|
@@ -58,6 +60,12 @@ class Cli
       parser.banner = "Usage: ncdutils web <file>"
       parser.on("--bind=ADDR", "Bind to the given address") { |s| @bind_address = s }
       arg_input_file
+    end
+    parser.on("web-upload", "Spawn a web server that allows export uploads") do
+      @cmd = Cmd::WebUpload
+      parser.banner = "Usage: ncdutils web-upload <file>"
+      parser.on("--bind=ADDR", "Bind to the given address") { |s| @bind_address = s }
+      parser.on("--storage=PATH", "Where to store uploaded exports") { |s| @upload_path = s }
     end
     parser.unknown_args do |args|
       next if args.size == 0
@@ -100,8 +108,18 @@ when .validate?
 
 when .web?
   f = NcduFile::Browser.new cli.input_file
-  s = HTTP::Server.new { |ctx| NcduWeb.serve f, ctx }
+  s = HTTP::Server.new { |ctx| NcduWeb.serve "/", f, ctx }
   s.bind cli.bind_address
   puts "Listening on #{cli.bind_address}"
   s.listen
+
+when .web_upload?
+  Dir.cd cli.upload_path
+  w = NcduWebUpload.new
+  s = HTTP::Server.new { |ctx| w.serve ctx }
+  s.bind cli.bind_address
+  puts "Serving #{cli.upload_path}"
+  puts "Listening on #{cli.bind_address}"
+  s.listen
+
 end
