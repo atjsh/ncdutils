@@ -42,10 +42,34 @@ class NcduWeb
     res << "</span>" if tags
   end
 
+  def print_flags(item)
+    case item.type
+    when -4
+      res << %{<abbr title="Kernel filesystem">^</abbr>}
+    when -3
+      res << %{<abbr title="Other filesystem">&gt;</abbr>}
+    when -2
+      res << %{<abbr title="Excluded">&lt;</abbr>}
+    when -1
+      res << %{<abbr class="error" title="Error reading this entry">!</abbr>}
+    when 0
+      if item.rderr == true
+        res << %{<abbr class="error" title="Error reading directory contents">!</abbr>}
+      elsif item.rderr == false
+        res << %{<abbr class="error" title="Error reading subdirectory">.</abbr>}
+      elsif item.sub.nil?
+        res << %{<abbr title="Empty directory">e</abbr>}
+      end
+    when 2
+      res << %{<abbr title="Special file">@</abbr>}
+    when 3
+      res << %{<abbr title="Hardlink">H[#{item.nlink}]</abbr>}
+    end
+  end
+
   def listing(ref)
     # TODO:
     # - Sort options
-    # - item type / flags
     # - asize?
     # - extended info?
     # - Pagination?
@@ -68,6 +92,7 @@ class NcduWeb
     res << %{
       <table class=\"listing\">
       <thead><tr>
+        <td class="flags"></td>
         <td class="num">Size</td>}
     res << %{<td class="num">Shr</td>} if hasshr
     res << %{<td class="num">Num</td>} if hasnum
@@ -76,7 +101,9 @@ class NcduWeb
 
     list.each_with_index do |item, i|
       break if i >= MAX_LISTING
-      res << "<tr><td class=\"num\">"
+      res << %{<tr><td class="flags">}
+      print_flags item
+      res << %{</td><td class="num">}
       ((item.type == 0 ? item.cumdsize : item.dsize)/1024).format res, decimal_places: 0, only_significant: true
       res << "K</td>"
       if hasshr
@@ -115,7 +142,7 @@ class NcduWeb
   def parents(path)
     res << "<nav>"
     path.each_with_index do |item, i|
-      res << %{<span class="sep">/</span>} if i > 0
+      res << %{<span class="sep">} << (i == 1 && path[0].name == "/".to_slice ? "" : "/") << %{</span>} if i > 0
       if i+1 != path.size
         res << "<a href=\""
         (path.size-i-1).times { res << "../" }
@@ -131,6 +158,7 @@ class NcduWeb
     res << "<!DOCTYPE html>\n"
     res << %{<html><head>
       <meta name="robots" value="noindex, nofollow">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
       <title>Ncdu » /}
     path[1..].each_with_index do |item, i|
       res << "/" if i > 0
@@ -148,8 +176,9 @@ class NcduWeb
         body { font: 13px sans-serif; margin: 5px; background: #fff; color: #000 }
         a { color: #00c; text-decoration: none }
         a:hover { text-decoration: underline }
-        em { color: #c00 }
+        em, .error { color: #c00 }
         .name { white-space: pre-wrap }
+        abbr { cursor: pointer; text-decoration: none }
         table { margin: 5px; border-collapse: collapse }
         p { margin: 5px }
         td { padding: 1px 5px }
@@ -164,6 +193,7 @@ class NcduWeb
 
         .listing { width: 100% }
         .listing tbody tr:hover { background: #eee }
+        .flags { white-space: nowrap; width: 1px; font-weight: bold }
         .num { text-align: right; white-space: nowrap; }
         tbody .num { font-family: monospace; width: 1px }
         .file { color: #000 }
@@ -172,7 +202,7 @@ class NcduWeb
       <header>
         <h1>Ncdu Export Browser</h1>
         <span>
-          <a href="} << @prefix << %{?export.ncdu">export.ncdu</a>
+          <a href="} << @prefix << %{?export.ncdu" download="export.ncdu">export.ncdu</a>
           (} << file.reader.size.humanize_bytes << %{)
           } << (@prefix != "/" ? %{| <a href="/">new upload</a>} : "") << %{
         </span>
@@ -186,12 +216,16 @@ class NcduWeb
 
   def handle(rpath)
     path = file.resolve Path.posix URI.decode rpath
-    if path
+    if path.nil?
+      res.respond_with_status 404, "Page not found"
+    elsif path[-1].type == 0 && req.path[-1] != '/'
+      res.redirect "#{req.path}/"
+    elsif path[-1].type != 0 && req.path[-1] == '/'
+      res.redirect req.path.rstrip '/'
+    else
       res.content_type = "text/html; charset=utf8"
       res.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
       render path
-    else
-      res.respond_with_status 404, "Page not found"
     end
   end
 
@@ -262,6 +296,7 @@ class NcduWebUpload
       <head>
        <title>Ncdu Export Browser</title>
        <meta name="robots" value="noindex, nofollow">
+       <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
        <style type="text/css">
         * { font: inherit; color: inherit; border: 0; margin: 0; padding: 0 }
         body { font: 15px sans-serif; margin: 5px; background: #fff; color: #000 }
@@ -369,7 +404,7 @@ class NcduWebUpload
       id = upload_io ctx, part.body if part.name == "f"
     end
     if id
-      ctx.response.redirect "/"+id+"/", :see_other
+      ctx.response.redirect "/#{id}/", :see_other
     else
       ctx.response.respond_with_status :bad_request
     end
@@ -397,12 +432,14 @@ class NcduWebUpload
       return
     end
 
-    name, _, _ = ctx.request.path.lstrip('/').partition '/'
+    name, sep, _ = ctx.request.path.lstrip('/').partition '/'
     file = lookup name
     if file.nil?
       ctx.response.respond_with_status 404, "Page not found"
+    elsif sep.empty?
+      ctx.response.redirect "/#{name}/"
     else
-      NcduWeb.serve "/"+name+"/", file, ctx
+      NcduWeb.serve "/#{name}/", file, ctx
     end
   end
 end
