@@ -144,8 +144,11 @@ class NcduWeb
     path.each_with_index do |item, i|
       res << %{<span class="sep">} << (i == 1 && path[0].name == "/".to_slice ? "" : "/") << %{</span>} if i > 0
       if i+1 != path.size
-        res << "<a href=\""
-        (path.size-i-1).times { res << "../" }
+        res << "<a href=\"#{@prefix}"
+        path[1..i].each do |p|
+          URI.encode_path res, String.new p.name
+          res << "/"
+        end
         res << "\">"
       end
       print_name item.name
@@ -164,14 +167,7 @@ class NcduWeb
       res << "/" if i > 0
       print_name item.name, false
     end
-    res << "</title><base href=\"" << @prefix
-    # The path and file URLs rely on this base; the final '/' is not always
-    # included in the request URI but required for the links to work.
-    path[1..].each do |item|
-      URI.encode_path res, String.new item.name
-      res << "/"
-    end
-    res << %{"><style type="text/css">
+    res << %{</title><style type="text/css">
         * { font: inherit; color: inherit; border: 0; margin: 0; padding: 0 }
         body { font: 13px sans-serif; margin: 5px; background: #fff; color: #000 }
         a { color: #00c; text-decoration: none }
@@ -215,7 +211,7 @@ class NcduWeb
   end
 
   def handle(rpath)
-    path = file.resolve Path.posix URI.decode rpath
+    path = file.resolve URI.decode rpath
     if path.nil?
       res.respond_with_status 404, "Page not found"
     elsif path[-1].type == 0 && req.path[-1] != '/'

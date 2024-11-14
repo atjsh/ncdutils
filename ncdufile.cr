@@ -617,26 +617,35 @@ module NcduFile
     end
 
     # TODO: Memoize/cache
-    # TODO: This function assumes that non-root item names don't contain a '/'.
-    #   This is always true for ncdu-generated exports, but ncdu itself handles
-    #   '/' in names just fine and I expect multi-argument scans to make use of
-    #   that, if I ever get to implementing that feature.
     def resolve(path)
       parents = [root] of Item
-      path.each_part do |name|
-        next if name == "" || name == "/"
-        sub = parents.last.sub || return nil
+      path = path.strip('/').to_slice
+      return parents if path.empty?
+      while true
         found = false
+        sub = parents.last.sub || return nil
         list(sub).each do |item|
-          if item.name == name.to_slice
-            parents.push item.detach
+          # Prefix match, while checking that the boundary of the match is
+          # either the entire path or a separator.
+          # item.name may contain a path rather than just a component, but this
+          # algorithm assumes that the export does not contain ambiguous names,
+          # e.g. if our path is 'a/b/c' and the directory listing has both 'a'
+          # and 'a/b', the first that happens to match is used, even if it
+          # doesn't have a matching sub-path.
+          next if item.name.size > path.size
+          next if item.name.size < path.size && path[item.name.size] != 47
+          next if item.name != path[0...item.name.size]
+          parents.push item.detach
+          if item.name.size == path.size
+            return parents
+          else
+            path = path[item.name.size+1..]
             found = true
             break
           end
         end
         return nil unless found
       end
-      parents
     end
   end
 end
