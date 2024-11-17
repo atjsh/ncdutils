@@ -214,7 +214,6 @@ class NcduWeb
   end
 
   def iteminfo(item)
-    # TODO: dev / ino
     res << %{<table class="iteminfo"><tr><td class="ref">#{item.ref}</td><td>} <<
       case item.type
       when -4 then "Excluded (kernfs)"
@@ -267,9 +266,31 @@ class NcduWeb
       res << "</tr>"
     end
 
-    if mtime = item.mtime
-      res << %{<tr><td class="key">Last modified</td><td>#{ Time.unix mtime }</td></tr>}
+    if item.mtime || item.type == 0
+      res << %{<tr>}
+      if mtime = item.mtime
+        res << %{<td class="key">Last modified</td><td>#{ Time.unix mtime }</td>}
+      end
+      if item.type == 0
+        res << %{<td class="key">Device ID</td><td>}
+        res.printf "0x%x", item.dev || 0
+        res << %{</td>}
+      end
+      res << %{</tr>}
     end
+
+    if item.type == 3
+      res << %{<tr><td class="key">Device ID</td><td>}
+      res.printf "0x%x", item.dev || 0
+      res << %{</td>}
+      if item.type == 3
+        res << %{<td class="key">Inode</td><td>}
+        res.printf "0x%x", item.ino
+        res << %{</td>}
+      end
+      res << %{</tr>}
+    end
+
     res << "</table>"
   end
 

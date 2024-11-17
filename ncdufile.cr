@@ -215,7 +215,7 @@ module NcduFile
     property prev : Ref?
     property asize : UInt64 = 0
     property dsize : UInt64 = 0
-    property dev : UInt64 = 0
+    property dev : UInt64?
     property rderr : Bool?
     property cumasize : UInt64 = 0
     property cumdsize : UInt64 = 0
@@ -322,7 +322,7 @@ module NcduFile
       io << " prev=" << prev if prev
       io << " asize=" << asize if asize != 0
       io << " dsize=" << dsize if dsize != 0
-      io << " dev=" << dev if dev != 0
+      io << " dev=" << dev if dev
       io << " rderrr=" << rderr if rderr
       io << " cumasize=" << cumasize if cumasize != 0
       io << " cumdsize=" << cumdsize if cumdsize != 0
@@ -566,21 +566,16 @@ module NcduFile
       Listing.new @reader, ref
     end
 
-    class Parents
-      property stack : Array(Item)
-
-      def initialize
-        @stack = [] of Item
-      end
-
+    class Parents < Array(Item)
       def push(item)
-        stack.push item.detach
+        item.dev = last.dev if !empty? && !item.dev
+        super item.detach
       end
 
       def to_s(io)
-        return if stack.empty?
-        io.write stack[0].name
-        stack[1..].each do |i|
+        return if empty?
+        io.write self[0].name unless self[0].name == "/".to_slice && size > 1
+        self[1..].each do |i|
           io.write_byte 47
           io.write i.name
         end
@@ -588,7 +583,7 @@ module NcduFile
 
       def to_s(io, subname)
         io << self
-        io.write_byte 47 if !stack.empty?
+        io.write_byte 47 unless empty? || (size == 1 && self[0].name == "/".to_slice)
         io.write subname
       end
     end
@@ -605,7 +600,7 @@ module NcduFile
         item = stack[-1].next
         if item.is_a?(Iterator::Stop)
           stack.pop
-          parents.stack.pop
+          parents.pop
         else
           yield parents, item
           if !item.sub.nil?
@@ -618,7 +613,8 @@ module NcduFile
 
     # TODO: Memoize/cache
     def resolve(path)
-      parents = [root] of Item
+      parents = Parents.new
+      parents.push root
       path = path.strip('/').to_slice
       return parents if path.empty?
       while true
@@ -635,7 +631,7 @@ module NcduFile
           next if item.name.size > path.size
           next if item.name.size < path.size && path[item.name.size] != 47
           next if item.name != path[0...item.name.size]
-          parents.push item.detach
+          parents.push item
           if item.name.size == path.size
             return parents
           else
