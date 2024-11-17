@@ -20,7 +20,7 @@ Requirements:
 Build:
 
 ```
-shards build
+shards build --release
 ```
 
 ## License

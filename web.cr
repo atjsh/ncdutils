@@ -67,6 +67,27 @@ class NcduWeb
     end
   end
 
+  def print_mode(mode)
+    res << case mode & 0o170000
+           when 0o040000 then 'd'
+           when 0o100000 then '-'
+           when 0o120000 then 'l'
+           when 0o010000 then 'p'
+           when 0o140000 then 's'
+           when 0o020000 then 'c'
+           when 0o060000 then 'b'
+           else '?' end
+    res << (mode & 0o400 > 0 ? 'r' : '-')
+    res << (mode & 0o200 > 0 ? 'w' : '-')
+    res << (mode & 0o4000 > 0 ? 's' : mode & 0o100 > 0 ? 'x' : '-')
+    res << (mode & 0o40 > 0 ? 'r' : '-')
+    res << (mode & 0o20 > 0 ? 'w' : '-')
+    res << (mode & 0o2000 > 0 ? 's' : mode & 0o10 > 0 ? 'x' : '-')
+    res << (mode & 0o4 > 0 ? 'r' : '-')
+    res << (mode & 0o2 > 0 ? 'w' : '-')
+    res << (mode & 0o1000 > 0 ? (mode & 0o170000 == 0o040000 ? 't' : 'T') : mode & 0o1 > 0 ? 'x' : '-')
+  end
+
   def listing(ref)
     # TODO:
     # - Sort options
@@ -80,9 +101,11 @@ class NcduWeb
 
     hasshr = false
     hasnum = false
+    hasmode = false
     list = file.list(ref).each.map do |item|
       hasshr = true if item.shrdsize > 0
       hasnum = true if item.type == 0
+      hasmode = true if !item.mode.nil?
       item.detach
     end.to_a.sort! do |a,b|
       (b.type == 0 ? b.cumdsize : b.dsize) <=> (a.type == 0 ? a.cumdsize : a.dsize)
@@ -92,8 +115,9 @@ class NcduWeb
     res << %{
       <table class=\"listing\">
       <thead><tr>
-        <td class="flags"></td>
-        <td class="num">Size</td>}
+        <td class="flags"></td>}
+    res << %{<td class="mode">Mode</td>} if hasmode
+    res << %{<td class="num">Size</td>}
     res << %{<td class="num">Shr</td>} if hasshr
     res << %{<td class="num">Num</td>} if hasnum
     res << %{<td>Name</td>
@@ -103,7 +127,17 @@ class NcduWeb
       break if i >= MAX_LISTING
       res << %{<tr><td class="flags">}
       print_flags item
-      res << %{</td><td class="num">}
+      res << %{</td>}
+      if hasmode
+        if mode = item.mode
+          res << %{<td class="mode">}
+          print_mode mode
+          res << "</td>"
+        else
+          res << "<td></td>"
+        end
+      end
+      res << %{<td class="num">}
       ((item.type == 0 ? item.cumdsize : item.dsize)/1024).format res, decimal_places: 0, only_significant: true
       res << "K</td>"
       if hasshr
@@ -190,6 +224,7 @@ class NcduWeb
         .listing { width: 100% }
         .listing tbody tr:hover { background: #eee }
         .flags { white-space: nowrap; width: 1px; font-weight: bold }
+        .mode { white-space: nowrap; width: 1px; font-family: monospace }
         .num { text-align: right; white-space: nowrap; }
         tbody .num { font-family: monospace; width: 1px }
         .file { color: #000 }
