@@ -108,7 +108,10 @@ class NcduWeb
       hasmode = true if !item.mode.nil?
       item.detach
     end.to_a.sort! do |a,b|
-      (b.type == 0 ? b.cumdsize : b.dsize) <=> (a.type == 0 ? a.cumdsize : a.dsize)
+      r = (b.type == 0 ? b.cumdsize : b.dsize) <=> (a.type == 0 ? a.cumdsize : a.dsize)
+      r = (b.type == 0 ? b.cumasize : b.asize) <=> (a.type == 0 ? a.cumasize : a.asize) if r == 0
+      r = a.name <=> b.name if r == 0
+      r
     end
 
     res << "<p>List truncated to the first " << MAX_LISTING.format << " items.</p>" if list.size > MAX_LISTING
@@ -204,11 +207,11 @@ class NcduWeb
     elsif size < 1073688136909
       res.printf "%5.1f GiB", size / (1<<30)
     elsif size < 1099456652194612
-      res.printf "%5.1f TiB", size / (1<<40)
+      res.printf "%5.1f TiB", size / (1u64<<40)
     elsif size < 1125843611847281869
-      res.printf "%5.1f PiB", size / (1<<50)
+      res.printf "%5.1f PiB", size / (1u64<<50)
     else
-      res.printf "%5.1f EiB", size / (1<<60)
+      res.printf "%5.1f EiB", size / (1u64<<60)
     end
     res << ")"
   end
