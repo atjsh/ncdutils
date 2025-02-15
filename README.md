@@ -7,7 +7,9 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 Utilities for working with [ncdu](https://dev.yorhel.nl/ncdu) exports.
 
-This is a fork of original [ncdutils](https://code.blicky.net/yorhel/ncdutils).
+This is a fork of original [ncdutils by yorhel](https://code.blicky.net/yorhel/ncdutils).
+
+Blog post about this fork: [here](https://blog.atj.sh/post/35)
 
 ## Features
 
