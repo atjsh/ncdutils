@@ -7,7 +7,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 
 Utilities for working with [ncdu](https://dev.yorhel.nl/ncdu) exports.
 
-WIP.
+## Features
+
+- find
+- validate
+- web, web-upload
+
+## Added Features
+
+These can be useful for cleaning up your data storage
+
+- cleanup: List unnecessary directories like node_modules, (pytohn) venv, dist and more.
+- freq: Show most frequent directory name
+- largest: Show top 100 largest single files
 
 ## Building
 
