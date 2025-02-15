@@ -3,9 +3,11 @@ SPDX-FileCopyrightText: Yorhel <projects@yorhel.nl>
 SPDX-License-Identifier: AGPL-3.0-only
 -->
 
-# ncdutils
+# ncdutils - fork
 
 Utilities for working with [ncdu](https://dev.yorhel.nl/ncdu) exports.
+
+This is a fork of original [ncdutils](https://code.blicky.net/yorhel/ncdutils).
 
 ## Features
 
@@ -15,7 +17,7 @@ Utilities for working with [ncdu](https://dev.yorhel.nl/ncdu) exports.
 
 ## Added Features
 
-These can be useful for cleaning up your data storage
+These can be useful for cleaning up your data storage.
 
 - cleanup: List unnecessary directories like node_modules, (pytohn) venv, dist and more.
 - freq: Show most frequent directory name
